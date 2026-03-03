@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   ArrowUpTrayIcon,
+  ArrowDownTrayIcon,
+  CheckCircleIcon,
   FolderOpenIcon,
   LinkIcon,
   MagnifyingGlassIcon,
@@ -33,6 +35,7 @@ const SkillsManager: React.FC = () => {
   const [activeTab, setActiveTab] = useState<SkillTab>('installed');
   const [marketplaceSkills, setMarketplaceSkills] = useState<MarketplaceSkill[]>([]);
   const [isLoadingMarketplace, setIsLoadingMarketplace] = useState(false);
+  const [installingSkillId, setInstallingSkillId] = useState<string | null>(null);
   const [skillPendingDelete, setSkillPendingDelete] = useState<Skill | null>(null);
   const [isDeletingSkill, setIsDeletingSkill] = useState(false);
 
@@ -227,6 +230,30 @@ const SkillsManager: React.FC = () => {
   const handleImportFromGithub = async () => {
     if (isDownloadingSkill) return;
     await handleAddSkillFromSource(skillDownloadSource);
+  };
+
+  const isSkillInstalled = (skillId: string) => {
+    return skills.some(s => s.id === skillId);
+  };
+
+  const handleInstallMarketplaceSkill = async (skill: MarketplaceSkill) => {
+    if (installingSkillId || !skill.url) return;
+    setInstallingSkillId(skill.id);
+    setSkillActionError('');
+    try {
+      const result = await skillService.downloadSkill(skill.url);
+      if (!result.success) {
+        setSkillActionError(result.error || i18nService.t('skillInstallFailed'));
+        return;
+      }
+      if (result.skills) {
+        dispatch(setSkills(result.skills));
+      }
+    } catch {
+      setSkillActionError(i18nService.t('skillInstallFailed'));
+    } finally {
+      setInstallingSkillId(null);
+    }
   };
 
   return (
@@ -445,6 +472,24 @@ const SkillsManager: React.FC = () => {
                     <span className="text-sm font-medium dark:text-claude-darkText text-claude-text truncate">
                       {skill.name}
                     </span>
+                  </div>
+                  <div className="flex-shrink-0">
+                    {isSkillInstalled(skill.id) ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-lg text-green-600 dark:text-green-400 bg-green-500/10">
+                        <CheckCircleIcon className="h-3.5 w-3.5" />
+                        {i18nService.t('skillAlreadyInstalled')}
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleInstallMarketplaceSkill(skill)}
+                        disabled={installingSkillId !== null}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-lg bg-claude-accent text-white hover:bg-claude-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <ArrowDownTrayIcon className="h-3.5 w-3.5" />
+                        {installingSkillId === skill.id ? i18nService.t('skillInstalling') : i18nService.t('skillInstall')}
+                      </button>
+                    )}
                   </div>
                 </div>
 
