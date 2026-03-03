@@ -2300,7 +2300,7 @@ if (!gotTheLock) {
     });
 
     // 处理渲染进程崩溃或退出
-    mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    mainWindow.webContents.on('render-process-gone', (_event: any, details: any) => {
       console.error('Window render process gone:', details);
       scheduleReload('webContents-crashed');
     });
@@ -2337,7 +2337,7 @@ if (!gotTheLock) {
     }
 
     // 添加错误处理
-    mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
+    mainWindow.webContents.on('did-fail-load', (_event: any, errorCode: any, errorDescription: any) => {
       console.error('Page failed to load:', errorCode, errorDescription);
       // 如果加载失败，尝试重新加载
       if (isDev) {

@@ -19,12 +19,37 @@ const USER_MEMORIES_MIGRATION_KEY = 'userMemories.migration.v1.completed';
 // and passing the buffer directly to initSqlJs bypasses Emscripten's file loading,
 // which can fail or hang when the install path contains Chinese characters on Windows.
 function loadWasmBinary(): ArrayBuffer {
-  const wasmPath = app.isPackaged
-    ? path.join(
-        process.resourcesPath,
-        'app.asar.unpacked/node_modules/sql.js/dist/sql-wasm.wasm'
-      )
-    : path.join(app.getAppPath(), 'node_modules/sql.js/dist/sql-wasm.wasm');
+  let wasmPath;
+  
+  if (app.isPackaged) {
+    wasmPath = path.join(
+      process.resourcesPath,
+      'app.asar.unpacked/node_modules/sql.js/dist/sql-wasm.wasm'
+    );
+  } else {
+    // Try multiple paths to find the wasm file
+    const possiblePaths = [
+      // Path when running from project root
+      path.join(app.getAppPath(), 'node_modules/sql.js/dist/sql-wasm.wasm'),
+      // Path when running from dist-electron directory
+      path.join(app.getAppPath(), '..', 'node_modules/sql.js/dist/sql-wasm.wasm'),
+      // Path when running with npx electron .
+      path.join(process.cwd(), 'node_modules/sql.js/dist/sql-wasm.wasm')
+    ];
+    
+    // Find the first existing path
+    for (const pathOption of possiblePaths) {
+      if (fs.existsSync(pathOption)) {
+        wasmPath = pathOption;
+        break;
+      }
+    }
+    
+    if (!wasmPath) {
+      throw new Error(`Could not find sql-wasm.wasm file. Tried paths: ${possiblePaths.join(', ')}`);
+    }
+  }
+  
   const buf = fs.readFileSync(wasmPath);
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 }

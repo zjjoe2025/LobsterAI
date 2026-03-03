@@ -83,6 +83,7 @@
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.16",
     "@types/dompurify": "^3.0.5",
+    "@types/electron": "1.6.12",
     "@types/extract-zip": "^2.0.1",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.0.0",
