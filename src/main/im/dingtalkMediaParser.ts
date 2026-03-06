@@ -3,6 +3,7 @@
  * 解析文本中的媒体标记
  */
 import type { MediaMarker } from './types';
+import { stripFileProtocol, safeDecodeURIComponent } from '../libs/pathUtils';
 
 // 文件扩展名分类
 const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'];
@@ -60,11 +61,11 @@ function getMediaTypeByExtension(filePath: string): 'image' | 'audio' | 'video' 
  * 清理路径（移除 file:// 协议，处理转义空格）
  */
 function cleanPath(rawPath: string): string {
-  let path = rawPath.replace(/\\ /g, ' ');
-  if (path.startsWith('file:///')) {
-    path = decodeURIComponent(path.replace('file://', ''));
+  let cleaned = rawPath.replace(/\\ /g, ' ');
+  if (/^file:\/\//i.test(cleaned)) {
+    cleaned = safeDecodeURIComponent(stripFileProtocol(cleaned));
   }
-  return path;
+  return cleaned;
 }
 
 /**

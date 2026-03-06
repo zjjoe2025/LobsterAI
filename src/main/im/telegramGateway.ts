@@ -19,6 +19,7 @@ import {
 import { extractMediaFromMessage, cleanupOldMediaFiles } from './telegramMedia';
 import { parseMediaMarkers } from './dingtalkMediaParser';
 import { fetchWithSystemProxy } from './http';
+import { expandHome } from '../libs/pathUtils';
 
 /**
  * Custom fetch wrapper that uses Node.js native AbortController
@@ -503,10 +504,7 @@ export class TelegramGateway extends EventEmitter {
         // Check which files exist
         for (const marker of markers) {
           // Expand ~ to home directory
-          let filePath = marker.path;
-          if (filePath.startsWith('~/')) {
-            filePath = path.join(process.env.HOME || '', filePath.slice(2));
-          }
+          const filePath = expandHome(marker.path);
           if (fs.existsSync(filePath)) {
             const stats = fs.statSync(filePath);
             log(`[Telegram Gateway] 发现有效媒体文件:`, JSON.stringify({
@@ -929,10 +927,7 @@ export class TelegramGateway extends EventEmitter {
     const validFiles: Array<{ path: string; name?: string; type: string }> = [];
 
     for (const marker of markers) {
-      let filePath = marker.path;
-      if (filePath.startsWith('~/')) {
-        filePath = path.join(process.env.HOME || '', filePath.slice(2));
-      }
+      const filePath = expandHome(marker.path);
       if (fs.existsSync(filePath)) {
         validFiles.push({ path: filePath, name: marker.name, type: marker.type });
       } else {

@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
 import type { IMMediaType } from './types';
+import { expandHome, stripFileProtocol, safeDecodeURIComponent } from '../libs/pathUtils';
 
 // Types
 export type FeishuFileType = 'opus' | 'mp4' | 'pdf' | 'doc' | 'xls' | 'ppt' | 'stream';
@@ -204,14 +205,12 @@ export function resolveFeishuMediaPath(rawPath: string): string {
   let resolved = rawPath;
 
   // Handle file:// protocol
-  if (resolved.startsWith('file:///')) {
-    resolved = decodeURIComponent(resolved.replace('file://', ''));
+  if (/^file:\/\//i.test(resolved)) {
+    resolved = safeDecodeURIComponent(stripFileProtocol(resolved));
   }
 
   // Handle ~ home directory
-  if (resolved.startsWith('~')) {
-    resolved = resolved.replace('~', process.env.HOME || '');
-  }
+  resolved = expandHome(resolved);
 
   return resolved;
 }

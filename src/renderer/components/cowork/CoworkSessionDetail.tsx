@@ -23,7 +23,15 @@ import { coworkService } from '../../services/cowork';
 import SidebarToggleIcon from '../icons/SidebarToggleIcon';
 import ComposeIcon from '../icons/ComposeIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
-import { getCompactFolderName } from '../../utils/path';
+import {
+  getCompactFolderName,
+  sanitizeFileName,
+  mapSandboxGuestPathToCwd,
+  mapSandboxGuestPathsInText,
+  parseRootRelativePath,
+  normalizeLocalPath,
+  toAbsolutePathFromCwd,
+} from '../../utils/pathUtils';
 
 interface CoworkSessionDetailProps {
   onManageSkills?: () => void;
@@ -37,11 +45,9 @@ interface CoworkSessionDetailProps {
 }
 
 const AUTO_SCROLL_THRESHOLD = 120;
-const INVALID_FILE_NAME_PATTERN = /[<>:"/\\|?*\u0000-\u001F]/g;
 
 const sanitizeExportFileName = (value: string): string => {
-  const sanitized = value.replace(INVALID_FILE_NAME_PATTERN, ' ').replace(/\s+/g, ' ').trim();
-  return sanitized || 'cowork-session';
+  return sanitizeFileName(value, 'cowork-session');
 };
 
 const formatExportTimestamp = (value: Date): string => {
@@ -250,142 +256,6 @@ const getToolResultDisplay = (message: CoworkMessage): string => {
     return message.metadata?.error ?? '';
   }
   return '';
-};
-
-const safeDecodeURIComponent = (value: string): string => {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-};
-
-const stripHashAndQuery = (value: string): string => value.split('#')[0].split('?')[0];
-
-const stripFileProtocol = (value: string): string => {
-  let cleaned = value.replace(/^file:\/\//i, '');
-  if (/^\/[A-Za-z]:/.test(cleaned)) {
-    cleaned = cleaned.slice(1);
-  }
-  return cleaned;
-};
-
-const hasScheme = (value: string): boolean => /^[a-z][a-z0-9+.-]*:/i.test(value);
-
-const isAbsolutePath = (value: string): boolean => (
-  value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value)
-);
-
-const isRelativePath = (value: string): boolean => !isAbsolutePath(value) && !hasScheme(value);
-const SANDBOX_WORKSPACE_GUEST_ROOT = '/workspace/project';
-const SANDBOX_WORKSPACE_LEGACY_ROOT = '/workspace';
-const SANDBOX_WORKSPACE_RESERVED_DIRS = new Set(['skills', 'ipc', 'tmp']);
-const SANDBOX_WORKSPACE_PATH_PATTERN = /\/workspace(?:\/project)?(?:\/[^\s'"`)\]}>,;:!?]*)?/g;
-
-const isReservedSandboxSegment = (relativePath: string): boolean => {
-  const [firstSegment] = relativePath.split('/');
-  return Boolean(firstSegment && SANDBOX_WORKSPACE_RESERVED_DIRS.has(firstSegment.toLowerCase()));
-};
-
-const mapSandboxGuestPathToCwd = (filePath: string, cwd?: string): string | null => {
-  if (!cwd) return null;
-
-  const normalizedPath = filePath.replace(/\\/g, '/');
-  const normalizedCwd = cwd.replace(/[\\/]+$/, '');
-
-  if (
-    normalizedPath === SANDBOX_WORKSPACE_GUEST_ROOT
-    || normalizedPath.startsWith(`${SANDBOX_WORKSPACE_GUEST_ROOT}/`)
-  ) {
-    const relativePath = normalizedPath
-      .slice(SANDBOX_WORKSPACE_GUEST_ROOT.length)
-      .replace(/^\/+/, '');
-    if (relativePath && isReservedSandboxSegment(relativePath)) {
-      return null;
-    }
-    return relativePath ? `${normalizedCwd}/${relativePath}` : normalizedCwd;
-  }
-
-  if (
-    normalizedPath !== SANDBOX_WORKSPACE_LEGACY_ROOT
-    && !normalizedPath.startsWith(`${SANDBOX_WORKSPACE_LEGACY_ROOT}/`)
-  ) {
-    return null;
-  }
-
-  const legacyRelativePath = normalizedPath
-    .slice(SANDBOX_WORKSPACE_LEGACY_ROOT.length)
-    .replace(/^\/+/, '');
-  if (!legacyRelativePath) {
-    return normalizedCwd;
-  }
-
-  if (isReservedSandboxSegment(legacyRelativePath)) {
-    return null;
-  }
-
-  return `${normalizedCwd}/${legacyRelativePath}`;
-};
-
-const mapSandboxGuestPathsInText = (value: string, cwd?: string): string => {
-  if (!value || !cwd || !value.includes('/workspace')) {
-    return value;
-  }
-
-  return value.replace(SANDBOX_WORKSPACE_PATH_PATTERN, (candidatePath) =>
-    mapSandboxGuestPathToCwd(candidatePath, cwd) ?? candidatePath);
-};
-
-const parseRootRelativePath = (value: string): string | null => {
-  const trimmed = value.trim();
-  if (!/^file:\/\//i.test(trimmed)) return null;
-  const separatorIndex = trimmed.indexOf('::');
-  if (separatorIndex < 0) return null;
-
-  const rootPart = trimmed.slice(0, separatorIndex);
-  const relativePart = trimmed.slice(separatorIndex + 2);
-  if (!relativePart.trim()) return null;
-
-  const rootPath = safeDecodeURIComponent(stripFileProtocol(stripHashAndQuery(rootPart)));
-  const relativePath = safeDecodeURIComponent(stripHashAndQuery(relativePart));
-  if (!rootPath || !relativePath) return null;
-
-  const normalizedRoot = rootPath.replace(/[\\/]+$/, '');
-  const normalizedRelative = relativePath.replace(/^[\\/]+/, '');
-  if (!normalizedRelative) return null;
-
-  return `${normalizedRoot}/${normalizedRelative}`;
-};
-
-const normalizeLocalPath = (
-  value: string
-): { path: string; isRelative: boolean; isAbsolute: boolean } | null => {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const fileScheme = /^file:\/\//i.test(trimmed);
-  const schemePresent = hasScheme(trimmed);
-  if (schemePresent && !fileScheme && !isAbsolutePath(trimmed)) return null;
-
-  let raw = trimmed;
-  if (fileScheme) {
-    raw = stripFileProtocol(raw);
-  }
-  raw = stripHashAndQuery(raw);
-  const decoded = safeDecodeURIComponent(raw);
-  const path = decoded || raw;
-  if (!path) return null;
-
-  const isAbsolute = isAbsolutePath(path);
-  const isRelative = isRelativePath(path);
-  return { path, isRelative, isAbsolute };
-};
-
-const toAbsolutePathFromCwd = (filePath: string, cwd: string): string => {
-  if (isAbsolutePath(filePath)) {
-    return filePath;
-  }
-  return `${cwd.replace(/\/$/, '')}/${filePath.replace(/^\.\//, '')}`;
 };
 
 type ToolGroupItem = {

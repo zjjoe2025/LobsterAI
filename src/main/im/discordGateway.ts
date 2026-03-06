@@ -24,6 +24,7 @@ import {
 } from './types';
 import { parseMediaMarkers, stripMediaMarkers } from './dingtalkMediaParser';
 import { downloadDiscordAttachment, mapDiscordContentType } from './discordMediaDownload';
+import { expandHome } from '../libs/pathUtils';
 
 export class DiscordGateway extends EventEmitter {
   private client: Client | null = null;
@@ -350,10 +351,7 @@ export class DiscordGateway extends EventEmitter {
           // Check which files exist
           for (const marker of markers) {
             // Expand ~ to home directory
-            let filePath = marker.path;
-            if (filePath.startsWith('~/')) {
-              filePath = path.join(process.env.HOME || '', filePath.slice(2));
-            }
+            const filePath = expandHome(marker.path);
             if (fs.existsSync(filePath)) {
               const stats = fs.statSync(filePath);
               this.log(`[Discord Gateway] 发现有效媒体文件:`, JSON.stringify({
@@ -535,10 +533,7 @@ export class DiscordGateway extends EventEmitter {
     const validFiles: Array<{ path: string; name?: string }> = [];
 
     for (const marker of markers) {
-      let filePath = marker.path;
-      if (filePath.startsWith('~/')) {
-        filePath = path.join(process.env.HOME || '', filePath.slice(2));
-      }
+      const filePath = expandHome(marker.path);
       if (fs.existsSync(filePath)) {
         validFiles.push({ path: filePath, name: marker.name });
       } else {

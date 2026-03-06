@@ -8,6 +8,7 @@ import { getInternalApiBaseURL } from './coworkOpenAICompatProxy';
 import { coworkLog } from './coworkLogger';
 import { appendPythonRuntimeToEnv } from './pythonRuntime';
 import { isSystemProxyEnabled, resolveSystemProxyUrl } from './systemProxy';
+import { normalizePlatformPath } from './pathUtils';
 
 function appendEnvPath(current: string | undefined, additions: string[]): string | undefined {
   const items = new Set<string>();
@@ -268,7 +269,7 @@ function normalizeWindowsPath(input: string | undefined): string | null {
   const unquoted = trimmed.replace(/^["']+|["']+$/g, '');
   if (!unquoted) return null;
 
-  return unquoted.replace(/\//g, '\\');
+  return normalizePlatformPath(unquoted);
 }
 
 function listWindowsCommandPaths(command: string): string[] {

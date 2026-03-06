@@ -12,7 +12,7 @@ import { setDraftPrompt } from '../../store/slices/coworkSlice';
 import { setSkills, toggleActiveSkill } from '../../store/slices/skillSlice';
 import { Skill } from '../../types/skill';
 import { CoworkImageAttachment } from '../../types/cowork';
-import { getCompactFolderName } from '../../utils/path';
+import { getCompactFolderName } from '../../utils/pathUtils';
 
 type CoworkAttachment = {
   path: string;

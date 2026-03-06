@@ -12,6 +12,7 @@ import { getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
 import { loadClaudeSdk } from './claudeSdk';
 import { getElectronNodeRuntimePath, getEnhancedEnv, getEnhancedEnvWithTmpdir, getSkillsRoot } from './coworkUtil';
 import { coworkLog, getCoworkLogPath } from './coworkLogger';
+import { expandHome, normalizePlatformPath, normalizeUnicode } from './pathUtils';
 import { ensurePythonPipReady, ensurePythonRuntimeReady } from './pythonRuntime';
 import { cpRecursiveSync } from '../fsCompat';
 import { isQuestionLikeMemoryText, type CoworkMemoryGuardLevel } from './coworkMemoryExtractor';
@@ -1269,11 +1270,8 @@ export class CoworkRunner extends EventEmitter {
   }
 
   private resolveAttachmentPath(inputPath: string, cwd: string): string {
-    if (inputPath.startsWith('~/')) {
-      const home = process.env.HOME || process.env.USERPROFILE || '';
-      return home ? path.resolve(home, inputPath.slice(2)) : path.resolve(cwd, inputPath);
-    }
-    return path.isAbsolute(inputPath) ? path.resolve(inputPath) : path.resolve(cwd, inputPath);
+    const expanded = expandHome(inputPath);
+    return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(cwd, expanded);
   }
 
   private toWorkspaceRelativePromptPath(cwd: string, absolutePath: string): string {
@@ -1952,7 +1950,7 @@ export class CoworkRunner extends EventEmitter {
   private normalizeWorkspaceRoot(workspaceRoot: string, cwd: string): string {
     const fallbackRoot = path.resolve(cwd);
     const normalizedRoot = workspaceRoot?.trim()
-      ? path.resolve(workspaceRoot)
+      ? path.resolve(normalizeUnicode(workspaceRoot))
       : fallbackRoot;
     try {
       return fs.realpathSync(normalizedRoot);
@@ -2032,7 +2030,7 @@ export class CoworkRunner extends EventEmitter {
   }
 
   private resolveSessionCwdForExecution(sessionId: string, cwd: string, workspaceRoot: string): string {
-    const trimmed = cwd.trim();
+    const trimmed = normalizePlatformPath(cwd.trim());
     const directResolved = path.resolve(trimmed || workspaceRoot || process.cwd());
     if (this.isDirectory(directResolved)) {
       return directResolved;
@@ -3005,7 +3003,7 @@ export class CoworkRunner extends EventEmitter {
         }
 
         const child = spawn(command, effectiveSpawnArgs, {
-          cwd: spawnOptions.cwd,
+          cwd: spawnOptions.cwd ? normalizePlatformPath(spawnOptions.cwd) : spawnOptions.cwd,
           env: spawnEnv,
           stdio: ['pipe', 'pipe', 'pipe'],
           windowsHide: process.platform === 'win32',

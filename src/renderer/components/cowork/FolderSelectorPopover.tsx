@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FolderPlusIcon, ClockIcon, ChevronRightIcon, FolderIcon } from '@heroicons/react/24/outline';
 import { i18nService } from '../../services/i18n';
 import { coworkService } from '../../services/cowork';
-import { getCompactFolderName } from '../../utils/path';
+import { getCompactFolderName } from '../../utils/pathUtils';
 
 // Custom tooltip for folder paths
 interface PathTooltipProps {

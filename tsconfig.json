@@ -18,9 +18,10 @@
     "types": ["node", "vite/client"],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/renderer/*"]
+      "@/*": ["src/renderer/*"],
+      "@shared/*": ["src/shared/*"]
     }
   },
-  "include": ["src/renderer"],
+  "include": ["src/renderer", "src/shared"],
   "references": [{ "path": "./tsconfig.node.json" }]
 } 

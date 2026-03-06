@@ -11,6 +11,7 @@ import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { getCurrentApiConfig, resolveCurrentApiConfig, setStoreGetter } from './libs/claudeSettings';
 import { saveCoworkApiConfig } from './libs/coworkConfigStore';
 import { generateSessionTitle, probeCoworkModelReadiness } from './libs/coworkUtil';
+import { normalizePlatformPath, sanitizeFileName, sanitizeAttachmentName } from './libs/pathUtils';
 import { ensureSandboxReady, getSandboxStatus, onSandboxProgress } from './libs/coworkSandboxRuntime';
 import { startCoworkOpenAICompatProxy, stopCoworkOpenAICompatProxy, setScheduledTaskDeps } from './libs/coworkOpenAICompatProxy';
 import { IMGatewayManager, IMPlatform, IMGatewayConfig } from './im';
@@ -37,7 +38,6 @@ import {
 app.name = APP_NAME;
 app.setName(APP_NAME);
 
-const INVALID_FILE_NAME_PATTERN = /[<>:"/\\|?*\u0000-\u001F]/g;
 const MIN_MEMORY_USER_MEMORIES_MAX_ITEMS = 1;
 const MAX_MEMORY_USER_MEMORIES_MAX_ITEMS = 60;
 const IPC_MESSAGE_CONTENT_MAX_CHARS = 120_000;
@@ -62,16 +62,11 @@ const MIME_EXTENSION_MAP: Record<string, string> = {
 };
 
 const sanitizeExportFileName = (value: string): string => {
-  const sanitized = value.replace(INVALID_FILE_NAME_PATTERN, ' ').replace(/\s+/g, ' ').trim();
-  return sanitized || 'cowork-session';
+  return sanitizeFileName(value, 'cowork-session');
 };
 
 const sanitizeAttachmentFileName = (value?: string): string => {
-  const raw = typeof value === 'string' ? value.trim() : '';
-  if (!raw) return 'attachment';
-  const fileName = path.basename(raw);
-  const sanitized = fileName.replace(INVALID_FILE_NAME_PATTERN, ' ').replace(/\s+/g, ' ').trim();
-  return sanitized || 'attachment';
+  return sanitizeAttachmentName(value, 'attachment');
 };
 
 const inferAttachmentExtension = (fileName: string, mimeType?: string): string => {
@@ -309,44 +304,7 @@ const TITLEBAR_COLORS = {
   light: { color: '#F3F4F6', symbolColor: '#1A1D23' },
 } as const;
 
-const safeDecodeURIComponent = (value: string): string => {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-};
-
-const normalizeWindowsShellPath = (inputPath: string): string => {
-  if (!isWindows) return inputPath;
-
-  const trimmed = inputPath.trim();
-  if (!trimmed) return inputPath;
-
-  let normalized = trimmed;
-  if (/^file:\/\//i.test(normalized)) {
-    normalized = safeDecodeURIComponent(normalized.replace(/^file:\/\//i, ''));
-  }
-
-  if (/^\/[A-Za-z]:/.test(normalized)) {
-    normalized = normalized.slice(1);
-  }
-
-  const unixDriveMatch = normalized.match(/^[/\\]([A-Za-z])[/\\](.+)$/);
-  if (unixDriveMatch) {
-    const drive = unixDriveMatch[1].toUpperCase();
-    const rest = unixDriveMatch[2].replace(/[/\\]+/g, '\\');
-    return `${drive}:\\${rest}`;
-  }
-
-  if (/^[A-Za-z]:[/\\]/.test(normalized)) {
-    const drive = normalized[0].toUpperCase();
-    const rest = normalized.slice(1).replace(/\//g, '\\');
-    return `${drive}${rest}`;
-  }
-
-  return normalized;
-};
+const normalizeWindowsShellPath = normalizePlatformPath;
 
 // ==================== macOS Permissions ====================
 

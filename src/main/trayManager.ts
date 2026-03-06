@@ -12,6 +12,8 @@ function getTrayIconPath(): string {
   const isMac = process.platform === 'darwin';
   const isWin = process.platform === 'win32';
 
+  // In packaged builds, electron-builder copies resources/tray → resourcesPath/tray.
+  // In dev, __dirname is dist-electron/, so go up one level to project root.
   const basePath = app.isPackaged
     ? path.join(process.resourcesPath, 'tray')
     : path.join(__dirname, '..', 'resources', 'tray');
