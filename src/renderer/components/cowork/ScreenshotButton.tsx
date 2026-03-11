@@ -43,6 +43,11 @@ const ScreenshotButton: React.FC<ScreenshotButtonProps> = ({
           isImage: true,
           dataUrl: result.dataUrl,
         });
+      } else if (result.error === 'screen_permission_denied') {
+        // macOS screen recording permission not granted
+        window.electron.shell.openExternal(
+          'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
+        );
       }
     } catch (error) {
       console.error('[ScreenshotButton] capture failed:', error);

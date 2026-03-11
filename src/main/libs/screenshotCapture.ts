@@ -14,6 +14,7 @@ import {
   nativeImage,
   screen,
   app,
+  systemPreferences,
 } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -107,16 +108,24 @@ function captureDisplayMacOS(display: Electron.Display): Promise<Electron.Native
   });
 }
 
-async function captureDisplayWindows(display: Electron.Display): Promise<Electron.NativeImage | null> {
-  const { width, height } = display.size;
-  const sf = display.scaleFactor;
+async function captureAllDisplaysWindows(
+  displays: Electron.Display[],
+): Promise<(Electron.NativeImage | null)[]> {
+  // Use the largest display dimensions for thumbnail size to ensure quality
+  const maxSf = Math.max(...displays.map((d) => d.scaleFactor));
+  const maxW = Math.max(...displays.map((d) => d.size.width));
+  const maxH = Math.max(...displays.map((d) => d.size.height));
   const sources = await desktopCapturer.getSources({
     types: ['screen'],
-    thumbnailSize: { width: Math.round(width * sf), height: Math.round(height * sf) },
+    thumbnailSize: {
+      width: Math.round(maxW * maxSf),
+      height: Math.round(maxH * maxSf),
+    },
   });
-  if (sources.length === 0) return null;
-  const src = sources.find((s) => s.display_id === String(display.id)) ?? sources[0];
-  return src.thumbnail;
+  return displays.map((d) => {
+    const src = sources.find((s) => s.display_id === String(d.id));
+    return src ? src.thumbnail : null;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +156,7 @@ function showOverlaysOnAllDisplays(
     // show them all at once (showInactive) then focus the active one.
     const onWindowReady = () => {
       loadedCount++;
-      if (loadedCount < displays.length) return;
+      if (loadedCount !== displays.length) return;
       if (settled) return;
 
       // Show all overlays without stealing focus / switching Spaces
@@ -237,6 +246,14 @@ export async function captureScreenshot(
   const { hideWindow = false, cwd } = options;
 
   try {
+    // 0. Check macOS screen recording permission
+    if (process.platform === 'darwin') {
+      const status = systemPreferences.getMediaAccessStatus('screen');
+      if (status !== 'granted') {
+        return { success: false, error: 'screen_permission_denied' };
+      }
+    }
+
     // 1. Hide main window if requested
     if (hideWindow && mainWindow && mainWindow.isVisible()) {
       mainWindow.hide();
@@ -250,16 +267,15 @@ export async function captureScreenshot(
 
     // 3. Capture every display in parallel
     const displays = screen.getAllDisplays();
-    const images: (Electron.NativeImage | null)[] = await Promise.all(
-      displays.map((d) => {
-        if (process.platform === 'darwin') {
-          return captureDisplayMacOS(d);
-        } else if (process.platform === 'win32') {
-          return captureDisplayWindows(d);
-        }
-        return Promise.resolve(null);
-      }),
-    );
+    let images: (Electron.NativeImage | null)[];
+
+    if (process.platform === 'darwin') {
+      images = await Promise.all(displays.map((d) => captureDisplayMacOS(d)));
+    } else if (process.platform === 'win32') {
+      images = await captureAllDisplaysWindows(displays);
+    } else {
+      images = displays.map((): Electron.NativeImage | null => null);
+    }
 
     if (images.every((img) => !img || img.isEmpty())) {
       return { success: false, error: 'Failed to capture screen' };
@@ -303,7 +319,11 @@ export async function captureScreenshot(
       return { success: false, error: 'cancelled' };
     }
 
+    // 8. Release NativeImages for non-selected displays to reduce peak memory
     const fullImg = images[result.displayIndex];
+    for (let i = 0; i < images.length; i++) {
+      if (i !== result.displayIndex) images[i] = null;
+    }
     if (!fullImg || fullImg.isEmpty()) {
       return { success: false, error: 'Failed to capture selected display' };
     }
