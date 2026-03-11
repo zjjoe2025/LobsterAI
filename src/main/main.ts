@@ -26,6 +26,7 @@ import { initLogger, getLogFilePath } from './logger';
 import { getCoworkLogPath } from './libs/coworkLogger';
 import { exportLogsZip } from './libs/logExport';
 import { ensurePythonRuntimeReady } from './libs/pythonRuntime';
+import { captureScreenshot } from './libs/screenshotCapture';
 import {
   applySystemProxyEnv,
   resolveSystemProxyUrl,
@@ -2143,6 +2144,14 @@ if (!gotTheLock) {
           error: error instanceof Error ? error.message : 'Failed to read file',
         };
       }
+    }
+  );
+
+  // Screenshot handler
+  ipcMain.handle(
+    'screenshot:capture',
+    async (_event, options?: { hideWindow?: boolean; cwd?: string }) => {
+      return captureScreenshot(mainWindow, options);
     }
   );
 

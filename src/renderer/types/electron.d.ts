@@ -341,6 +341,15 @@ interface IElectronAPI {
     onStreamComplete: (callback: (data: { sessionId: string; claudeSessionId: string | null }) => void) => () => void;
     onStreamError: (callback: (data: { sessionId: string; error: string }) => void) => () => void;
   };
+  screenshot: {
+    capture: (options?: { hideWindow?: boolean; cwd?: string }) => Promise<{
+      success: boolean;
+      filePath?: string;
+      dataUrl?: string;
+      fileName?: string;
+      error?: string;
+    }>;
+  };
   dialog: {
     selectDirectory: () => Promise<{ success: boolean; path: string | null }>;
     selectFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<{ success: boolean; path: string | null }>;

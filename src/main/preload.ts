@@ -223,6 +223,10 @@ contextBridge.exposeInMainWorld('electron', {
       return () => ipcRenderer.removeListener('cowork:stream:error', handler);
     },
   },
+  screenshot: {
+    capture: (options?: { hideWindow?: boolean; cwd?: string }) =>
+      ipcRenderer.invoke('screenshot:capture', options),
+  },
   dialog: {
     selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
     selectFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) =>
