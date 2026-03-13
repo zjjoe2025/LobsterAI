@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { RootState, store } from './store';
+import { RootState } from './store';
 import Settings, { type SettingsOpenOptions } from './components/Settings';
 import Sidebar from './components/Sidebar';
 import Toast from './components/Toast';
@@ -110,11 +110,12 @@ const App: React.FC = () => {
         }));
         const resolvedModels = providerModels.length > 0 ? providerModels : fallbackModels;
 
-        // If user is logged in, prepend the built-in free model
-        const authState = store.getState().auth;
-        const modelsWithFree = authState.isLoggedIn
-          ? [BUILTIN_FREE_MODEL, ...resolvedModels]
-          : resolvedModels;
+        // Always add the built-in free model:
+        // - If user has configured providers with models, place it after user models
+        // - Otherwise (using fallback models), place it at the top as default
+        const modelsWithFree = providerModels.length > 0
+          ? [...resolvedModels, BUILTIN_FREE_MODEL]
+          : [BUILTIN_FREE_MODEL, ...resolvedModels];
 
         if (modelsWithFree.length > 0) {
           dispatch(setAvailableModels(modelsWithFree));
@@ -374,7 +375,9 @@ const App: React.FC = () => {
         }
       });
       if (allModels.length > 0) {
-        dispatch(setAvailableModels(allModels));
+        // Always append the built-in free model after user's models
+        const finalModels = [...allModels, BUILTIN_FREE_MODEL];
+        dispatch(setAvailableModels(finalModels));
       }
     }
   };

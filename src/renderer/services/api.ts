@@ -1,5 +1,6 @@
 import { store } from '../store';
 import { configService } from './config';
+import { getServerBaseUrl } from './endpoints';
 import { ChatMessagePayload, ChatUserMessageInput, ImageAttachment } from '../types/chat';
 import { authService } from './auth';
 
@@ -506,6 +507,14 @@ class ApiService {
               try {
                 const parsed = JSON.parse(data);
 
+                // Anthropic SSE error event handling
+                if (parsed.type === 'error') {
+                  const errorMsg = parsed.error?.message || 'API error';
+                  this.cleanup();
+                  reject(new ApiError(errorMsg, parsed.error?.code));
+                  return;
+                }
+
                 // Anthropic SSE 事件处理
                 if (parsed.type === 'content_block_delta') {
                   const delta = parsed.delta;
@@ -810,36 +819,27 @@ class ApiService {
 
   /**
    * Proxy mode: route request through the LobsterAI backend proxy.
-   * Uses OpenAI-compatible format with Bearer token authentication.
+   * Uses native Anthropic /v1/messages format with Bearer token authentication.
    */
   private async chatWithProxy(
     message: string | ChatUserMessageInput,
     onProgress?: (content: string, reasoning?: string) => void,
     history: ChatMessagePayload[] = [],
-    modelId: string = 'qwen-3.5',
+    modelId: string = 'claude-sonnet-4-20250514',
   ): Promise<{ content: string; reasoning?: string }> {
     const accessToken = await authService.getAccessToken();
+    console.log('[Proxy] accessToken:', accessToken ? `${accessToken.substring(0, 20)}...` : 'null');
     if (!accessToken) {
       throw new ApiError('LOGIN_REQUIRED');
     }
 
-    // Get server base URL from app config
-    const appConfig = configService.getConfig();
-    const serverBaseUrl = (appConfig as any).server?.baseUrl || 'https://api.lobsterai.com';
-    const proxyUrl = `${serverBaseUrl}/api/proxy/chat/completions`;
-
-    const proxyConfig: ApiConfig = {
-      apiKey: accessToken,
-      baseUrl: proxyUrl,
-      provider: 'lobsterai-proxy',
-      apiFormat: 'openai',
-    };
+    // Get server base URL based on environment (test/prod)
+    const proxyUrl = `${getServerBaseUrl()}/api/proxy/v1/messages`;
 
     const userMessage: ChatUserMessageInput = typeof message === 'string'
       ? { content: message }
       : { content: message.content || '', images: message.images };
 
-    // Reuse the OpenAI-compatible chat method, but override the URL building
     let fullContent = '';
     let fullReasoning = '';
 
@@ -848,12 +848,46 @@ class ApiService {
       const requestId = generateRequestId();
       this.currentRequestId = requestId;
 
+      // Separate system messages from conversation messages (Anthropic format)
+      const systemMessages = history.filter(m => m.role === 'system');
+      const nonSystemMessages = history.filter(m => m.role !== 'system');
+
       const formattedMessages = [
-        ...history,
+        ...nonSystemMessages,
         { role: 'user' as const, content: userMessage.content, images: userMessage.images },
       ]
-        .map(item => this.formatOpenAIMessage(item, false))
+        .map(item => this.formatAnthropicMessage(item, false))
         .filter(Boolean);
+
+      const requestBody: any = {
+        model: modelId,
+        max_tokens: 8192,
+        messages: formattedMessages,
+        stream: true,
+      };
+
+      // Add system message as top-level field
+      if (systemMessages.length > 0) {
+        const systemContent = systemMessages
+          .map(m => this.mergeContentWithImageHint(m.content, m.images))
+          .filter(Boolean)
+          .join('\n');
+        if (systemContent) {
+          requestBody.system = systemContent;
+        }
+      }
+
+      // Enable thinking for supported models
+      const isThinkingModel = modelId.includes('claude-3-7') ||
+                              modelId.includes('claude-sonnet-4') ||
+                              modelId.includes('claude-opus-4');
+      if (isThinkingModel) {
+        requestBody.thinking = {
+          type: 'enabled',
+          budget_tokens: 10000,
+        };
+        requestBody.max_tokens = 16000;
+      }
 
       return new Promise((resolve, reject) => {
         let aborted = false;
@@ -872,16 +906,25 @@ class ApiService {
 
             try {
               const parsed = JSON.parse(data);
-              const delta = parsed.choices?.[0]?.delta || {};
-              const content = typeof delta.content === 'string' ? delta.content : '';
-              const reasoning = typeof delta.reasoning_content === 'string'
-                ? delta.reasoning_content
-                : '';
 
-              if (content) fullContent += content;
-              if (reasoning) fullReasoning += reasoning;
-              if (content || reasoning) {
-                onProgress?.(fullContent, fullReasoning || undefined);
+              // Anthropic SSE error event handling
+              if (parsed.type === 'error') {
+                const errorMsg = parsed.error?.message || 'Upstream error';
+                this.cleanup();
+                reject(new ApiError(errorMsg, parsed.error?.code));
+                return;
+              }
+
+              // Anthropic SSE event handling
+              if (parsed.type === 'content_block_delta') {
+                const delta = parsed.delta;
+                if (delta.type === 'text_delta') {
+                  fullContent += delta.text;
+                  onProgress?.(fullContent, fullReasoning || undefined);
+                } else if (delta.type === 'thinking_delta') {
+                  fullReasoning += delta.thinking;
+                  onProgress?.(fullContent, fullReasoning || undefined);
+                }
               }
             } catch (e) {
               console.warn('Failed to parse proxy SSE message:', e);
@@ -918,13 +961,10 @@ class ApiService {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${accessToken}`,
           },
-          body: JSON.stringify({
-            model: modelId,
-            messages: formattedMessages,
-            stream: true,
-          }),
+          body: JSON.stringify(requestBody),
           requestId,
         }).then((response) => {
+          console.log('[Proxy] stream response:', response.status, response.statusText);
           if (!response.ok && !aborted) {
             this.cleanup();
             if (response.status === 402) {

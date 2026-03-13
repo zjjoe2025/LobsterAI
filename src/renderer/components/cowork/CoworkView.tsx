@@ -17,6 +17,7 @@ import ComposeIcon from '../icons/ComposeIcon';
 import WindowTitleBar from '../window/WindowTitleBar';
 import { QuickActionBar, PromptPanel } from '../quick-actions';
 import type { SettingsOpenOptions } from '../Settings';
+import LoginPromptModal from './LoginPromptModal';
 import type { CoworkSession, CoworkImageAttachment } from '../../types/cowork';
 
 export interface CoworkViewProps {
@@ -32,6 +33,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
   const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
   const [isInitialized, setIsInitialized] = useState(false);
+  const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   // Track if we're starting a session to prevent duplicate submissions
   const isStartingRef = useRef(false);
   // Track pending start request so stop can cancel delayed startup.
@@ -130,13 +132,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
 
     // Check if login is required for the current model
     if (needsLoginForCurrentModel()) {
-      // Show login required toast/prompt
-      window.dispatchEvent(new CustomEvent('app:showToast', {
-        detail: {
-          type: 'info',
-          message: i18nService.t('authLoginRequired'),
-        },
-      }));
+      setShowLoginPrompt(true);
       return;
     }
 
@@ -333,6 +329,16 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
     promptInputRef.current?.focus();
   };
 
+  const handleLoginFromPrompt = () => {
+    setShowLoginPrompt(false);
+    authService.login();
+  };
+
+  const handleConfigureModelFromPrompt = () => {
+    setShowLoginPrompt(false);
+    onRequestAppSettings?.({ initialTab: 'model' });
+  };
+
   useEffect(() => {
     const handleNewSession = () => {
       dispatch(clearCurrentSession());
@@ -457,6 +463,13 @@ const CoworkView: React.FC<CoworkViewProps> = ({ onRequestAppSettings, onShowSki
           </div>
         </div>
       </div>
+      {showLoginPrompt && (
+        <LoginPromptModal
+          onLogin={handleLoginFromPrompt}
+          onConfigureModel={handleConfigureModelFromPrompt}
+          onClose={() => setShowLoginPrompt(false)}
+        />
+      )}
     </div>
   );
 };

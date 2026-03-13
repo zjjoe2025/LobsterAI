@@ -130,7 +130,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     featureInDevelopment: '正在开发中',
 
     // 认证相关
-    authDailyQuota: '今日额度',
+    authDailyQuota: '今日积分',
     authTopUp: '充值',
     authLogout: '退出登录',
     authLoginRequired: '请先登录后再开始对话。',
@@ -140,6 +140,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authSettingsLink: '设置',
     authLoginToChat: '登录后即可开始聊天',
     authFreeLabel: 'Free',
+    authLoginPromptTitle: '需要登录',
+    authLoginPromptMessage: '当前使用的免费模型需要登录后才能使用。你也可以在设置中配置自己的模型和 API Key。',
+    authLoginPromptLoginBtn: '登录',
+    authLoginPromptConfigureBtn: '配置模型',
     
     // 错误信息
     failedToLoadSettings: '加载设置失败',
@@ -912,7 +916,7 @@ const translations: Record<LanguageType, Record<string, string>> = {
     featureInDevelopment: 'In development',
 
     // Auth
-    authDailyQuota: 'Daily Quota',
+    authDailyQuota: 'Daily Credits',
     authTopUp: 'Top Up',
     authLogout: 'Log Out',
     authLoginRequired: 'Please log in to start a conversation.',
@@ -922,6 +926,10 @@ const translations: Record<LanguageType, Record<string, string>> = {
     authSettingsLink: 'Settings',
     authLoginToChat: 'Log in to start chatting',
     authFreeLabel: 'Free',
+    authLoginPromptTitle: 'Login Required',
+    authLoginPromptMessage: 'The current free model requires login. You can also configure your own model and API Key in Settings.',
+    authLoginPromptLoginBtn: 'Log In',
+    authLoginPromptConfigureBtn: 'Configure Model',
     
     // Error Messages
     failedToLoadSettings: 'Failed to load settings',

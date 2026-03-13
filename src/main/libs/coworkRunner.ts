@@ -451,6 +451,10 @@ interface ActiveSession {
   sandboxTurnResolve?: (result: { status: 'ok' } | { status: 'error'; message: string; hvfDenied: boolean; memoryFailed: boolean }) => void;
   /** When true, auto-approve all tool permissions (for scheduled tasks) */
   autoApprove?: boolean;
+  /** Redacted API config for diagnostic messages (no raw API key) */
+  apiConfig?: { model: string; baseURL: string; apiType?: string; hasApiKey: boolean };
+  /** Tail of SDK subprocess stderr, mirrored here for access in handleClaudeEvent() */
+  stderrTail?: string;
 }
 
 interface PendingPermission {
@@ -2836,6 +2840,15 @@ export class CoworkRunner extends EventEmitter {
       hasApiKey: Boolean(apiConfig.apiKey),
     });
 
+    // Store redacted API config on the active session so handleClaudeEvent()
+    // can include it in diagnostic error messages.
+    activeSession.apiConfig = {
+      model: apiConfig.model,
+      baseURL: apiConfig.baseURL,
+      apiType: apiConfig.apiType,
+      hasApiKey: Boolean(apiConfig.apiKey),
+    };
+
     const claudeCodePath = getClaudeCodePath();
     const envVars = await getEnhancedEnvWithTmpdir(cwd, 'local');
     const electronNodeRuntimePath = getElectronNodeRuntimePath();
@@ -2896,6 +2909,7 @@ export class CoworkRunner extends EventEmitter {
       if (stderrTail.length > STDERR_TAIL_MAX_CHARS) {
         stderrTail = stderrTail.slice(-STDERR_TAIL_MAX_CHARS);
       }
+      activeSession.stderrTail = stderrTail;
       coworkLog('WARN', 'ClaudeCodeProcess', 'stderr output', { stderr: message });
 
       // Detect fatal errors early and abort the session
@@ -3119,6 +3133,8 @@ export class CoworkRunner extends EventEmitter {
         nodeVersion: process.version,
         ANTHROPIC_BASE_URL: envVars.ANTHROPIC_BASE_URL,
         ANTHROPIC_MODEL: envVars.ANTHROPIC_MODEL,
+        ANTHROPIC_AUTH_TOKEN_present: Boolean(envVars.ANTHROPIC_AUTH_TOKEN),
+        ANTHROPIC_API_KEY_present: Boolean(envVars.ANTHROPIC_API_KEY),
         NODE_PATH: envVars.NODE_PATH,
         logFile: getCoworkLogPath(),
       });
@@ -3509,6 +3525,26 @@ export class CoworkRunner extends EventEmitter {
         }
       }, startupTimeoutMs);
 
+      // Log key query options for debugging (omit env and large objects)
+      const optionsSummary: Record<string, unknown> = {};
+      for (const key of Object.keys(options)) {
+        if (key === 'env') {
+          optionsSummary[key] = '(omitted)';
+        } else if (key === 'mcpServers') {
+          optionsSummary[key] = Object.keys(options[key] as Record<string, unknown>);
+        } else if (typeof options[key] === 'function') {
+          optionsSummary[key] = '(function)';
+        } else {
+          optionsSummary[key] = options[key];
+        }
+      }
+      coworkLog('INFO', 'runClaudeCodeLocal', 'Calling SDK query()', {
+        promptType: typeof queryPrompt,
+        promptLength: typeof queryPrompt === 'string' ? queryPrompt.length : undefined,
+        isAsyncIterable: typeof queryPrompt === 'object' && queryPrompt !== null && Symbol.asyncIterator in (queryPrompt as object),
+        optionsSummary: JSON.stringify(optionsSummary, null, 2),
+      });
+
       const result = await query({ prompt: queryPrompt, options } as any);
       coworkLog('INFO', 'runClaudeCodeLocal', 'Claude Code process started, iterating events');
       let eventCount = 0;
@@ -3526,6 +3562,18 @@ export class CoworkRunner extends EventEmitter {
         const eventPayload = event as Record<string, unknown> | null;
         const eventType = eventPayload && typeof eventPayload === 'object' ? String(eventPayload.type ?? '') : typeof event;
         coworkLog('INFO', 'runClaudeCodeLocal', `Event #${eventCount}: type=${eventType}`);
+
+        // Log full event payload for non-streaming events to aid debugging
+        if (eventType !== 'stream_event') {
+          try {
+            const eventDump = JSON.stringify(event, null, 2);
+            const truncated = eventDump && eventDump.length > 4000 ? eventDump.slice(0, 4000) + '...(truncated)' : eventDump;
+            coworkLog('INFO', 'runClaudeCodeLocal', `Event #${eventCount} payload: ${truncated}`);
+          } catch {
+            coworkLog('WARN', 'runClaudeCodeLocal', `Event #${eventCount} payload: (non-serializable)`);
+          }
+        }
+
         this.handleClaudeEvent(sessionId, event);
       }
       // Clean up timer if loop ended before first event (e.g. empty iterator)
@@ -3534,6 +3582,25 @@ export class CoworkRunner extends EventEmitter {
         startupTimer = null;
       }
       coworkLog('INFO', 'runClaudeCodeLocal', `Event iteration completed, total events: ${eventCount}`);
+
+      // Flag early failure pattern — the SDK exited after very few events,
+      // which typically means the first API call failed immediately.
+      if (eventCount <= 2) {
+        coworkLog('WARN', 'runClaudeCodeLocal', 'SDK exited after very few events — likely failed on first API call', {
+          eventCount,
+          apiConfig: activeSession.apiConfig,
+          stderrTailExcerpt: stderrTail ? stderrTail.slice(-500) : '(empty)',
+        });
+      }
+
+      // Always log stderr state when the event stream ends — this is critical for
+      // diagnosing error_during_execution results where the SDK provides no
+      // error/errors details.
+      coworkLog(stderrTail ? 'WARN' : 'INFO', 'runClaudeCodeLocal', 'SDK subprocess stderr state after event stream', {
+        stderrLength: stderrTail.length,
+        hasStderr: Boolean(stderrTail),
+        stderr: stderrTail ? stderrTail.slice(-3000) : '(empty)',
+      });
 
       if (this.stoppedSessions.has(sessionId)) {
         this.store.updateSession(sessionId, { status: 'idle' });
@@ -3569,11 +3636,16 @@ export class CoworkRunner extends EventEmitter {
         stderr: stderrOutput || '(no stderr captured)',
         claudeCodePath,
         claudeCodePathExists: fs.existsSync(claudeCodePath),
+        apiConfig: activeSession.apiConfig,
       });
 
+      // Build a user-facing error with API config summary and stderr.
+      const cfgSummary = activeSession.apiConfig
+        ? `\n\nDiagnostic context:\n  - Model: ${activeSession.apiConfig.model}\n  - Endpoint: ${activeSession.apiConfig.baseURL}\n  - Auth token: ${activeSession.apiConfig.hasApiKey ? 'present' : 'missing'}`
+        : '';
       const detailedError = stderrOutput
-        ? `${errorMessage}\n\nProcess stderr:\n${stderrOutput.slice(-2000)}\n\nLog file: ${getCoworkLogPath()}`
-        : `${errorMessage}\n\nLog file: ${getCoworkLogPath()}`;
+        ? `${errorMessage}${cfgSummary}\n\nProcess stderr:\n${stderrOutput.slice(-2000)}\n\nLog file: ${getCoworkLogPath()}`
+        : `${errorMessage}${cfgSummary}\n\nLog file: ${getCoworkLogPath()}`;
       this.handleError(sessionId, detailedError);
       throw error;
     } finally {
@@ -4776,16 +4848,12 @@ export class CoworkRunner extends EventEmitter {
       return;
     }
 
-    if (eventType === 'system') {
-      const subtype = String(payload.subtype ?? '');
-      if (subtype === 'init' && typeof payload.session_id === 'string') {
-        activeSession.claudeSessionId = payload.session_id;
-        this.store.updateSession(sessionId, { claudeSessionId: payload.session_id });
-      }
-      return;
-    }
-
     if (eventType === 'auth_status') {
+      coworkLog('INFO', 'handleClaudeEvent', 'Auth status event received', {
+        sessionId,
+        error: payload.error,
+        payloadKeys: Object.keys(payload).join(', '),
+      });
       const authError = this.normalizeSdkError(payload.error);
       if (authError) {
         this.handleError(sessionId, authError);
@@ -4793,7 +4861,41 @@ export class CoworkRunner extends EventEmitter {
       return;
     }
 
+    if (eventType === 'system') {
+      const subtype = String(payload.subtype ?? '');
+      coworkLog('INFO', 'handleClaudeEvent', 'System event received', {
+        sessionId,
+        subtype,
+        sessionIdFromPayload: payload.session_id,
+        payloadKeys: Object.keys(payload).join(', '),
+      });
+      if (subtype === 'init' && typeof payload.session_id === 'string') {
+        activeSession.claudeSessionId = payload.session_id;
+        this.store.updateSession(sessionId, { claudeSessionId: payload.session_id });
+      }
+      return;
+    }
+
     if (eventType === 'result') {
+      // Log the full result payload for debugging — especially useful when
+      // the SDK returns error_during_execution with no error/errors details.
+      let resultPayloadDump: string | undefined;
+      try {
+        resultPayloadDump = JSON.stringify(payload, null, 2);
+        if (resultPayloadDump && resultPayloadDump.length > 8000) {
+          resultPayloadDump = resultPayloadDump.slice(0, 8000) + '...(truncated)';
+        }
+      } catch {
+        resultPayloadDump = '(non-serializable)';
+      }
+      coworkLog('INFO', 'handleClaudeEvent', 'Result event payload', {
+        sessionId,
+        subtype: payload.subtype,
+        error: payload.error,
+        errors: payload.errors,
+        resultType: typeof payload.result,
+        fullPayload: resultPayloadDump,
+      });
       // Log token usage for observability
       const usage = (payload.usage ?? (payload.result && typeof payload.result === 'object' ? (payload.result as Record<string, unknown>).usage : undefined)) as Record<string, unknown> | undefined;
       if (usage) {
@@ -4815,12 +4917,64 @@ export class CoworkRunner extends EventEmitter {
             .filter((error) => error && error.toLowerCase() !== 'unknown')
           : [];
         const payloadError = this.normalizeSdkError(payload.error);
-        const errorMessage =
+        let errorMessage =
           errors.length > 0
             ? errors.join('\n')
             : payloadError
               ? payloadError
-              : 'Claude run failed';
+              : '';
+
+        // When the SDK returns error_during_execution with no error details,
+        // try to extract useful information from the result metadata.
+        if (!errorMessage) {
+          const usageObj = (payload.usage && typeof payload.usage === 'object' ? payload.usage : {}) as Record<string, unknown>;
+          const zeroTokens = Number(usageObj.input_tokens ?? 0) === 0
+            && Number(usageObj.output_tokens ?? 0) === 0;
+          const apiDurationMs = Number(payload.duration_api_ms ?? 0);
+          if (zeroTokens && apiDurationMs > 0) {
+            errorMessage = `API call failed after ${(apiDurationMs / 1000).toFixed(1)}s with no response (0 tokens). `
+              + 'The upstream API rejected the request or returned an incompatible response.';
+          } else if (zeroTokens) {
+            errorMessage = 'API call produced no tokens. The model may be unavailable or the request was rejected.';
+          } else {
+            errorMessage = 'Claude run failed';
+          }
+        }
+
+        // Append rich diagnostic context from the active session so the user
+        // can see the model, endpoint, auth state, and stderr at a glance.
+        const diagLines: string[] = [];
+        if (activeSession.apiConfig) {
+          const cfg = activeSession.apiConfig;
+          diagLines.push(`  - Model: ${cfg.model}`);
+          diagLines.push(`  - Endpoint: ${cfg.baseURL}`);
+          if (cfg.apiType) diagLines.push(`  - API type: ${cfg.apiType}`);
+          diagLines.push(`  - Auth token: ${cfg.hasApiKey ? 'present' : 'missing'}`);
+        }
+        const stderrExcerpt = activeSession.stderrTail?.trim();
+        if (stderrExcerpt) {
+          const tail = stderrExcerpt.length > 500 ? '...' + stderrExcerpt.slice(-500) : stderrExcerpt;
+          diagLines.push(`  - Stderr: ${tail}`);
+        }
+        diagLines.push(`  - Log file: ${getCoworkLogPath()}`);
+        errorMessage += '\n\nDiagnostic context:\n' + diagLines.join('\n');
+
+        // Log detailed diagnostic when the SDK returns error_during_execution
+        // with no actionable error details.
+        coworkLog('ERROR', 'handleClaudeEvent', 'SDK result error', {
+          sessionId,
+          subtype,
+          errorMessage,
+          payloadErrorRaw: payload.error,
+          payloadErrorsRaw: payload.errors,
+          durationMs: payload.duration_ms,
+          durationApiMs: payload.duration_api_ms,
+          numTurns: payload.num_turns,
+          totalCostUsd: payload.total_cost_usd,
+          isError: payload.is_error,
+          apiConfig: activeSession.apiConfig,
+          stderrTailExcerpt: activeSession.stderrTail ? activeSession.stderrTail.slice(-1000) : '(empty)',
+        });
         this.handleError(sessionId, errorMessage);
         return;
       }

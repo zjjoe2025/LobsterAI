@@ -229,17 +229,25 @@ async function judgeWithLlm(
   });
 
   try {
+    const isProxyEndpoint = config.baseURL.includes('/api/proxy');
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (isProxyEndpoint) {
+      headers['Authorization'] = `Bearer ${config.apiKey}`;
+    } else {
+      headers['x-api-key'] = config.apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+    }
+
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': config.apiKey,
-        'anthropic-version': '2023-06-01',
-      },
+      headers,
       body: JSON.stringify({
         model: config.model,
         max_tokens: 120,
         temperature: 0,
+        stream: false,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
       }),

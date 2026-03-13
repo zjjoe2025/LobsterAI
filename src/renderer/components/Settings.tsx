@@ -18,6 +18,7 @@ import BrainIcon from './icons/BrainIcon';
 import { useDispatch, useSelector } from 'react-redux';
 import { setAvailableModels } from '../store/slices/modelSlice';
 import { RootState } from '../store';
+import { BUILTIN_FREE_MODEL } from '../config';
 import ThemedSelect from './ui/ThemedSelect';
 import type {
   CoworkExecutionMode,
@@ -1205,7 +1206,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
           });
         }
       });
-      dispatch(setAvailableModels(allModels));
+      // Always append the built-in free model after user's models
+      const finalModels = [...allModels, BUILTIN_FREE_MODEL];
+      dispatch(setAvailableModels(finalModels));
 
       if (hasCoworkConfigChanges) {
         await coworkService.updateConfig({

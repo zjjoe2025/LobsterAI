@@ -116,6 +116,46 @@ function applyMacIconFix(appPath) {
     console.log('[electron-builder-hooks] ✓ CFBundleIconName already present');
   }
 
+  // Ensure CFBundleName is set to "LobsterAI"
+  const checkNameResult = spawnSync('plutil', [
+    '-extract', 'CFBundleName', 'raw', infoPlistPath
+  ], { encoding: 'utf-8' });
+
+  if (checkNameResult.status !== 0) {
+    console.log('[electron-builder-hooks] Adding CFBundleName to Info.plist...');
+    const addNameResult = spawnSync('plutil', [
+      '-insert', 'CFBundleName', '-string', 'LobsterAI', infoPlistPath
+    ], { encoding: 'utf-8' });
+
+    if (addNameResult.status === 0) {
+      console.log('[electron-builder-hooks] ✓ CFBundleName added successfully');
+    } else {
+      console.warn('[electron-builder-hooks] Failed to add CFBundleName:', addNameResult.stderr);
+    }
+  } else {
+    console.log('[electron-builder-hooks] ✓ CFBundleName already present:', checkNameResult.stdout.trim());
+  }
+
+  // Ensure CFBundleDisplayName is set to "LobsterAI"
+  const checkDisplayNameResult = spawnSync('plutil', [
+    '-extract', 'CFBundleDisplayName', 'raw', infoPlistPath
+  ], { encoding: 'utf-8' });
+
+  if (checkDisplayNameResult.status !== 0) {
+    console.log('[electron-builder-hooks] Adding CFBundleDisplayName to Info.plist...');
+    const addDisplayNameResult = spawnSync('plutil', [
+      '-insert', 'CFBundleDisplayName', '-string', 'LobsterAI', infoPlistPath
+    ], { encoding: 'utf-8' });
+
+    if (addDisplayNameResult.status === 0) {
+      console.log('[electron-builder-hooks] ✓ CFBundleDisplayName added successfully');
+    } else {
+      console.warn('[electron-builder-hooks] Failed to add CFBundleDisplayName:', addDisplayNameResult.stderr);
+    }
+  } else {
+    console.log('[electron-builder-hooks] ✓ CFBundleDisplayName already present:', checkDisplayNameResult.stdout.trim());
+  }
+
   // Clear extended attributes
   spawnSync('xattr', ['-cr', appPath], { encoding: 'utf-8' });
 
@@ -123,7 +163,7 @@ function applyMacIconFix(appPath) {
   spawnSync('touch', [appPath], { encoding: 'utf-8' });
   spawnSync('touch', [resourcesPath], { encoding: 'utf-8' });
 
-  console.log('[electron-builder-hooks] ✓ macOS icon fix applied');
+  console.log('[electron-builder-hooks] ✓ macOS icon and bundle name fix applied');
 }
 
 /**

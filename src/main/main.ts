@@ -782,6 +782,9 @@ const getAppIconPath = (): string | undefined => {
 // 保存对主窗口的引用
 let mainWindow: BrowserWindow | null = null;
 
+// Cache deep link URL received before mainWindow is ready (macOS cold start)
+let pendingDeepLink: string | null = null;
+
 onSandboxProgress((progress) => {
   const windows = BrowserWindow.getAllWindows();
   windows.forEach((win) => {
@@ -923,16 +926,23 @@ if (!gotTheLock) {
   // macOS: handle open-url event for deep links
   app.on('open-url', (event, url) => {
     event.preventDefault();
+    console.log('[Auth] deep link received (open-url):', url);
     try {
       const parsed = new URL(url);
       if (parsed.hostname === 'auth' && parsed.pathname === '/callback') {
         const code = parsed.searchParams.get('code');
-        if (code && mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('auth:callback', { code });
+        if (code) {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            console.log('[Auth] sending callback to renderer, code:', code);
+            mainWindow.webContents.send('auth:callback', { code });
+          } else {
+            console.log('[Auth] mainWindow not ready, caching deep link');
+            pendingDeepLink = url;
+          }
         }
       }
     } catch (e) {
-      console.error('[Main] Failed to parse open-url:', e);
+      console.error('[Auth] Failed to parse open-url:', e);
     }
   });
 
@@ -942,16 +952,23 @@ if (!gotTheLock) {
     // Check for deep link in command line args (Windows/Linux)
     const deepLink = commandLine.find(arg => arg.startsWith('lobsterai://'));
     if (deepLink) {
+      console.log('[Auth] deep link received (second-instance):', deepLink);
       try {
         const parsed = new URL(deepLink);
         if (parsed.hostname === 'auth' && parsed.pathname === '/callback') {
           const code = parsed.searchParams.get('code');
-          if (code && mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('auth:callback', { code });
+          if (code) {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              console.log('[Auth] sending callback to renderer, code:', code);
+              mainWindow.webContents.send('auth:callback', { code });
+            } else {
+              console.log('[Auth] mainWindow not ready, caching deep link');
+              pendingDeepLink = deepLink;
+            }
           }
         }
       } catch (e) {
-        console.error('[Main] Failed to parse deep link:', e);
+        console.error('[Auth] Failed to parse deep link:', e);
       }
     }
 
@@ -1098,12 +1115,18 @@ if (!gotTheLock) {
   // ── Auth IPC handlers ──
 
   /**
-   * Helper: Read the server base URL from the app config stored in SQLite.
-   * Falls back to a compile-time default if nothing is persisted yet.
+   * Server URL is determined by environment:
+   *   - Development (NODE_ENV=development): test environment
+   *   - Production (packaged app): production environment
    */
   const getServerBaseUrl = (): string => {
-    const cfg = getStore().get<{ server?: { baseUrl?: string } }>('app_config');
-    return cfg?.server?.baseUrl || 'https://api.lobsterai.com';
+    return isDev
+      ? 'http://10.55.165.37:18878'
+      : 'https://lobsterai-server.youdao.com';
+  };
+
+  const getPortalBaseUrl = (): string => {
+    return 'https://local.youdao.com:5180';
   };
 
   /**
@@ -1123,8 +1146,9 @@ if (!gotTheLock) {
 
   ipcMain.handle('auth:login', async () => {
     try {
-      const serverBaseUrl = getServerBaseUrl();
-      const loginUrl = `${serverBaseUrl}/api/auth/login?source=electron`;
+      // Open Portal login page directly in system browser (Portal handles URS SDK)
+      const portalBaseUrl = getPortalBaseUrl();
+      const loginUrl = `${portalBaseUrl}/login?source=electron`;
       await shell.openExternal(loginUrl);
       return { success: true };
     } catch (error) {
@@ -1136,21 +1160,35 @@ if (!gotTheLock) {
   ipcMain.handle('auth:exchange', async (_event, { code }: { code: string }) => {
     try {
       const serverBaseUrl = getServerBaseUrl();
-      const resp = await fetch(`${serverBaseUrl}/api/auth/exchange`, {
+      const url = `${serverBaseUrl}/api/auth/exchange`;
+      console.log('[Auth] exchange request:', url, 'code:', code);
+      const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ authCode: code }),
       });
+      console.log('[Auth] exchange response status:', resp.status);
       if (!resp.ok) {
         return { success: false, error: `Exchange failed: ${resp.status}` };
       }
-      const data = await resp.json() as {
-        accessToken: string;
-        refreshToken: string;
-        user: Record<string, unknown>;
-        quota: Record<string, unknown>;
+      // Server returns ApiResponse: { code, message, data: { accessToken, refreshToken, user, quota } }
+      const apiResp = await resp.json() as {
+        code: number;
+        message: string;
+        data: {
+          accessToken: string;
+          refreshToken: string;
+          user: Record<string, unknown>;
+          quota: Record<string, unknown>;
+        };
       };
+      if (apiResp.code !== 0) {
+        console.error('[Auth] exchange API error:', apiResp.code, apiResp.message);
+        return { success: false, error: apiResp.message };
+      }
+      const data = apiResp.data;
       saveAuthTokens(data.accessToken, data.refreshToken);
+      console.log('[Auth] exchange success, user:', data.user);
       return { success: true, user: data.user, quota: data.quota };
     } catch (error) {
       console.error('[Auth] exchange failed:', error);
@@ -1163,12 +1201,35 @@ if (!gotTheLock) {
       const tokens = getAuthTokens();
       if (!tokens) return { success: false };
       const serverBaseUrl = getServerBaseUrl();
-      const resp = await fetch(`${serverBaseUrl}/api/user/profile`, {
-        headers: { Authorization: `Bearer ${tokens.accessToken}` },
-      });
-      if (!resp.ok) return { success: false };
-      const data = await resp.json() as { user: Record<string, unknown>; quota: Record<string, unknown> };
-      return { success: true, user: data.user, quota: data.quota };
+
+      // Fetch profile and quota in parallel
+      const [profileResp, quotaResp] = await Promise.all([
+        fetch(`${serverBaseUrl}/api/user/profile`, {
+          headers: { Authorization: `Bearer ${tokens.accessToken}` },
+        }),
+        fetch(`${serverBaseUrl}/api/user/quota`, {
+          headers: { Authorization: `Bearer ${tokens.accessToken}` },
+        }),
+      ]);
+
+      if (!profileResp.ok || !quotaResp.ok) return { success: false };
+
+      const profileData = await profileResp.json() as { code: number; data: Record<string, unknown> };
+      const quotaData = await quotaResp.json() as { code: number; data: Record<string, unknown> };
+
+      if (profileData.code !== 0 || quotaData.code !== 0) return { success: false };
+
+      return {
+        success: true,
+        user: {
+          userId: String(profileData.data.id),
+          phone: profileData.data.phone || '',
+          nickname: profileData.data.nickname || '',
+          avatarUrl: profileData.data.avatarUrl || '',
+          yid: profileData.data.yid || '',
+        },
+        quota: quotaData.data,
+      };
     } catch {
       return { success: false };
     }
@@ -1183,8 +1244,9 @@ if (!gotTheLock) {
         headers: { Authorization: `Bearer ${tokens.accessToken}` },
       });
       if (!resp.ok) return { success: false };
-      const data = await resp.json() as { quota: Record<string, unknown> };
-      return { success: true, quota: data.quota };
+      const apiResp = await resp.json() as { code: number; data: Record<string, unknown> };
+      if (apiResp.code !== 0) return { success: false };
+      return { success: true, quota: apiResp.data };
     } catch {
       return { success: false };
     }
@@ -1219,9 +1281,10 @@ if (!gotTheLock) {
         body: JSON.stringify({ refreshToken: tokens.refreshToken }),
       });
       if (!resp.ok) return { success: false };
-      const data = await resp.json() as { accessToken: string; refreshToken?: string };
-      saveAuthTokens(data.accessToken, data.refreshToken || tokens.refreshToken);
-      return { success: true, accessToken: data.accessToken };
+      const apiResp = await resp.json() as { code: number; data: { accessToken: string; refreshToken?: string } };
+      if (apiResp.code !== 0) return { success: false };
+      saveAuthTokens(apiResp.data.accessToken, apiResp.data.refreshToken || tokens.refreshToken);
+      return { success: true, accessToken: apiResp.data.accessToken };
     } catch {
       return { success: false };
     }
@@ -1229,6 +1292,7 @@ if (!gotTheLock) {
 
   ipcMain.handle('auth:getAccessToken', async () => {
     const tokens = getAuthTokens();
+    console.log('[Auth] getAccessToken called, hasTokens:', !!tokens, 'hasAccessToken:', !!tokens?.accessToken);
     return tokens?.accessToken || null;
   });
 
@@ -2424,6 +2488,13 @@ if (!gotTheLock) {
     activeStreamControllers.set(options.requestId, controller);
 
     try {
+      console.log('[Stream] request url:', options.url);
+      console.log('[Stream] request headers:', JSON.stringify({
+        ...options.headers,
+        Authorization: options.headers.Authorization
+          ? `${options.headers.Authorization.substring(0, 30)}...`
+          : 'missing',
+      }));
       const response = await session.defaultSession.fetch(options.url, {
         method: options.method,
         headers: options.headers,
@@ -2433,6 +2504,7 @@ if (!gotTheLock) {
 
       if (!response.ok) {
         const errorData = await response.text();
+        console.log('[Stream] request failed:', response.status, response.statusText, errorData);
         activeStreamControllers.delete(options.requestId);
         return {
           ok: false,
@@ -2611,6 +2683,23 @@ if (!gotTheLock) {
     });
     mainWindow.webContents.on('did-finish-load', () => {
       emitWindowState();
+      // Flush any deep link received before the window was ready
+      if (pendingDeepLink) {
+        console.log('[Auth] flushing pending deep link:', pendingDeepLink);
+        try {
+          const parsed = new URL(pendingDeepLink);
+          if (parsed.hostname === 'auth' && parsed.pathname === '/callback') {
+            const code = parsed.searchParams.get('code');
+            if (code && mainWindow && !mainWindow.isDestroyed()) {
+              console.log('[Auth] sending cached callback to renderer, code:', code);
+              mainWindow.webContents.send('auth:callback', { code });
+            }
+          }
+        } catch (e) {
+          console.error('[Auth] Failed to parse pending deep link:', e);
+        }
+        pendingDeepLink = null;
+      }
     });
 
     // 处理窗口关闭

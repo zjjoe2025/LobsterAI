@@ -3,6 +3,7 @@ import { useSelector } from 'react-redux';
 import { RootState } from '../store';
 import { authService } from '../services/auth';
 import { i18nService } from '../services/i18n';
+import { formatCreditsCompact, quotaPercent } from '../utils/creditsFormat';
 
 const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const user = useSelector((state: RootState) => state.auth.user);
@@ -14,7 +15,7 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   };
 
   const handleTopUp = async () => {
-    await window.electron.shell.openExternal('https://portal.lobsterai.com');
+    await window.electron.shell.openExternal('https://local.youdao.com:5180');
   };
 
   const phoneSuffix = user?.phone ? user.phone.slice(-4) : '';
@@ -43,11 +44,11 @@ const UserMenu: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             <div className="flex-1 h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
               <div
                 className="h-full rounded-full bg-claude-accent transition-all"
-                style={{ width: `${Math.min(100, (quota.dailyUsed / Math.max(1, quota.dailyLimit)) * 100)}%` }}
+                style={{ width: `${quotaPercent(quota.dailyCreditsUsed, quota.dailyCreditsLimit)}%` }}
               />
             </div>
             <span className="text-xs dark:text-claude-darkTextSecondary text-claude-textSecondary shrink-0">
-              {quota.dailyUsed}/{quota.dailyLimit}
+              {formatCreditsCompact(quota.dailyCreditsUsed, i18nService.getLanguage())}/{formatCreditsCompact(quota.dailyCreditsLimit, i18nService.getLanguage())}
             </span>
           </div>
         </div>

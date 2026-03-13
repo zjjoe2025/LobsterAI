@@ -1302,7 +1302,19 @@ export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'):
     ? buildEnvForConfig(config)
     : { ...process.env };
 
+  console.log('[getEnhancedEnv] target:', target);
+  console.log('[getEnhancedEnv] config present:', Boolean(config));
+  if (config) {
+    console.log('[getEnhancedEnv] config.baseURL:', config.baseURL);
+    console.log('[getEnhancedEnv] config.apiType:', config.apiType);
+  }
+  console.log('[getEnhancedEnv] before applyPackagedEnvOverrides: ANTHROPIC_AUTH_TOKEN present =', Boolean(env.ANTHROPIC_AUTH_TOKEN));
+  console.log('[getEnhancedEnv] before applyPackagedEnvOverrides: ANTHROPIC_API_KEY present =', Boolean(env.ANTHROPIC_API_KEY));
+
   applyPackagedEnvOverrides(env);
+
+  console.log('[getEnhancedEnv] after applyPackagedEnvOverrides: ANTHROPIC_AUTH_TOKEN present =', Boolean(env.ANTHROPIC_AUTH_TOKEN));
+  console.log('[getEnhancedEnv] after applyPackagedEnvOverrides: ANTHROPIC_API_KEY present =', Boolean(env.ANTHROPIC_API_KEY));
 
   // Inject SKILLs directory path for skill scripts.
   // On Windows, normalise backslashes to forward slashes so the value is usable
@@ -1532,17 +1544,38 @@ export async function probeCoworkModelReadiness(
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(buildAnthropicMessagesUrl(config.baseURL), {
+    const isProxyEndpoint = config.baseURL.includes('/api/proxy');
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (isProxyEndpoint) {
+      headers['Authorization'] = `Bearer ${config.apiKey}`;
+    } else {
+      headers['x-api-key'] = config.apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+    }
+
+    const targetUrl = buildAnthropicMessagesUrl(config.baseURL);
+    console.log('[probeCoworkModelReadiness] baseURL:', config.baseURL);
+    console.log('[probeCoworkModelReadiness] targetUrl:', targetUrl);
+    console.log('[probeCoworkModelReadiness] isProxy:', isProxyEndpoint);
+    console.log('[probeCoworkModelReadiness] headers:', JSON.stringify(
+      Object.fromEntries(Object.entries(headers).map(([k, v]) =>
+        [k, k.toLowerCase() === 'authorization' ? v.substring(0, 20) + '...' : v]
+      ))
+    ));
+    console.log('[probeCoworkModelReadiness] model:', config.model);
+    console.log('[probeCoworkModelReadiness] apiKey present:', Boolean(config.apiKey));
+    console.log('[probeCoworkModelReadiness] apiKey length:', config.apiKey?.length ?? 0);
+
+    const response = await fetch(targetUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': config.apiKey,
-        'anthropic-version': '2023-06-01',
-      },
+      headers,
       body: JSON.stringify({
         model: config.model,
         max_tokens: 1,
         temperature: 0,
+        stream: false,
         messages: [{ role: 'user', content: 'Reply with "ok".' }],
       }),
       signal: controller.signal,
@@ -1550,6 +1583,11 @@ export async function probeCoworkModelReadiness(
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '');
+      console.log('[probeCoworkModelReadiness] FAILED status:', response.status);
+      console.log('[probeCoworkModelReadiness] response headers:', JSON.stringify(
+        Object.fromEntries(response.headers.entries())
+      ));
+      console.log('[probeCoworkModelReadiness] error body:', errorText.substring(0, 500));
       const errorSnippet = extractApiErrorSnippet(errorText);
       return {
         ok: false,
@@ -1559,6 +1597,7 @@ export async function probeCoworkModelReadiness(
       };
     }
 
+    console.log('[probeCoworkModelReadiness] OK - model ready');
     return { ok: true };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
@@ -1599,17 +1638,25 @@ export async function generateSessionTitle(userIntent: string | null): Promise<s
     const url = buildAnthropicMessagesUrl(config.baseURL);
     const prompt = `Generate a short title from this input, keep the same language, return plain text only (no markdown), and keep it within ${SESSION_TITLE_MAX_CHARS} characters: ${normalizedInput}`;
 
+    const isProxyEndpoint = config.baseURL.includes('/api/proxy');
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (isProxyEndpoint) {
+      headers['Authorization'] = `Bearer ${config.apiKey}`;
+    } else {
+      headers['x-api-key'] = config.apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+    }
+
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': config.apiKey,
-        'anthropic-version': '2023-06-01',
-      },
+      headers,
       body: JSON.stringify({
         model: config.model,
         max_tokens: 80,
         temperature: 0,
+        stream: false,
         messages: [{ role: 'user', content: prompt }],
       }),
       signal: controller.signal,
@@ -1625,7 +1672,36 @@ export async function generateSessionTitle(userIntent: string | null): Promise<s
       return fallbackTitle;
     }
 
-    const payload = await response.json();
+    const rawText = await response.text();
+    // Handle SSE-wrapped response: extract JSON from "data: {...}" lines
+    let payload: any;
+    if (rawText.startsWith('data:') || rawText.startsWith('event:')) {
+      const jsonChunks: string[] = [];
+      for (const line of rawText.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('data:') && trimmed !== 'data: [DONE]') {
+          jsonChunks.push(trimmed.slice(5).trim());
+        }
+      }
+      // Try to find a message_start or content_block_delta with text
+      let resultText = '';
+      for (const chunk of jsonChunks) {
+        try {
+          const obj = JSON.parse(chunk);
+          if (obj.type === 'content_block_delta' && obj.delta?.text) {
+            resultText += obj.delta.text;
+          }
+        } catch { /* skip unparseable chunks */ }
+      }
+      if (resultText) {
+        payload = { content: [{ type: 'text', text: resultText }] };
+      } else {
+        console.warn('[cowork-title] SSE response but no text extracted, raw:', rawText.slice(0, 300));
+        return fallbackTitle;
+      }
+    } else {
+      payload = JSON.parse(rawText);
+    }
     const llmTitle = extractTextFromAnthropicResponse(payload);
     return normalizeTitleToPlainText(llmTitle, fallbackTitle);
   } catch (error) {

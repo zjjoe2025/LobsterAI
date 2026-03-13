@@ -5,13 +5,14 @@ export interface UserProfile {
   phone: string;
   nickname: string;
   avatarUrl: string;
+  yid?: string;
 }
 
 export interface UserQuota {
-  dailyLimit: number;
-  dailyUsed: number;
+  dailyCreditsLimit: number;
+  dailyCreditsUsed: number;
+  dailyCreditsRemaining: number;
   planName: string | null; // null = free tier
-  creditsBalance: number;
 }
 
 interface AuthState {

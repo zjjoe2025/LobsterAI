@@ -9,6 +9,12 @@ const isTestMode = () => {
   return configService.getConfig().app?.testMode === true;
 };
 
+// 后端服务
+export const getServerBaseUrl = () => isTestMode()
+  // ? 'https://lobsterai-server.inner.youdao.com'
+  ? 'http://10.55.165.37:18878'
+  : 'https://lobsterai-server.youdao.com';
+
 // 自动更新
 export const getUpdateCheckUrl = () => isTestMode()
   ? 'https://api-overmind.youdao.com/openapi/get/luna/hardware/lobsterai/test/update'

@@ -8,6 +8,15 @@ class AuthService {
    * Initialize: try to restore login state from persisted token.
    */
   async init() {
+    // Register callback listener FIRST to avoid missing deep link events
+    // during the async getUser() call
+    console.log('[Auth] registering callback listener');
+    this.unsubCallback = window.electron.auth.onCallback(async ({ code }) => {
+      console.log('[Auth] callback received, code:', code);
+      await this.handleCallback(code);
+    });
+
+    // Then try to restore login state
     store.dispatch(setAuthLoading(true));
     try {
       const result = await window.electron.auth.getUser();
@@ -19,11 +28,6 @@ class AuthService {
     } catch {
       store.dispatch(setLoggedOut());
     }
-
-    // Listen for OAuth callback from protocol handler
-    this.unsubCallback = window.electron.auth.onCallback(async ({ code }) => {
-      await this.handleCallback(code);
-    });
   }
 
   /**
@@ -38,12 +42,22 @@ class AuthService {
    */
   async handleCallback(code: string) {
     try {
+      console.log('[Auth] exchanging code...');
       const result = await window.electron.auth.exchange(code);
       if (result.success) {
+        console.log('[Auth] exchange success, user:', result.user);
         store.dispatch(setLoggedIn({ user: result.user, quota: result.quota }));
+      } else {
+        console.error('[Auth] exchange failed:', result.error);
+        window.dispatchEvent(new CustomEvent('app:showToast', {
+          detail: result.error || '登录失败，请重试'
+        }));
       }
     } catch (e) {
-      console.error('Auth callback failed:', e);
+      console.error('[Auth] callback exception:', e);
+      window.dispatchEvent(new CustomEvent('app:showToast', {
+        detail: '登录失败，请重试'
+      }));
     }
   }
 
