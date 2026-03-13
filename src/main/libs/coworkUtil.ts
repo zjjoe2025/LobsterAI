@@ -156,6 +156,7 @@ function readWindowsRegistryPathValue(registryKey: string): string {
       encoding: 'utf-8',
       timeout: 8000,
       windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
     });
 
     for (const line of output.split(/\r?\n/)) {
@@ -295,7 +296,7 @@ function listGitInstallPathsFromRegistry(): string[] {
 
   for (const key of registryKeys) {
     try {
-      const output = execSync(`reg query "${key}" /v InstallPath`, { encoding: 'utf-8', timeout: 5000 });
+      const output = execSync(`reg query "${key}" /v InstallPath`, { encoding: 'utf-8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
       for (const line of output.split(/\r?\n/)) {
         const match = line.match(/InstallPath\s+REG_\w+\s+(.+)$/i);
         const root = normalizeWindowsPath(match?.[1]);
